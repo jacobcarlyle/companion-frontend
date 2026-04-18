@@ -2,8 +2,9 @@
 // ───  SET THESE TWO VALUES FOR YOUR DEPLOYMENT ───────────────────────────
 const API_BASE       = 'https://api.carlyle.me';
 const SESSION_SECRET = '99656fd155883d95b87a6a9984eba1d8ad643b8c83eb2f9756ecc55f281d174c';
-// Note: The frontend-baked secret gates /session and /ingest to reduce
-// casual abuse. It is not a hard security boundary — real protection is:
+const INGEST_SECRET  = '5c84d4f156bf117a4828a542c8164fe5de387d050e4e76df4544240a27ab34ee';
+// Note: The frontend-baked secrets gate /session and /ingest to reduce
+// casual abuse. They are not a hard security boundary — real protection is:
 // CORS locked to this origin + person allowlist server-side + 30-min cap.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ async function endSession() {
       method : 'POST',
       headers: {
         'Content-Type'    : 'application/json',
-        'x-ingest-secret' : SESSION_SECRET
+        'x-ingest-secret' : INGEST_SECRET
       },
       body: JSON.stringify({
         person,
