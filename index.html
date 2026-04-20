@@ -93,21 +93,81 @@
       width: 100%;
     }
     #endBtn:active { background: #cbd5e0; }
+
+    #talkBtn.thinking {
+      background: #d69e2e;
+      animation: pulse-think 1.8s infinite;
+    }
+    @keyframes pulse-think {
+      0%,100% { box-shadow: 0 6px 20px rgba(214,158,46,0.4); }
+      50%     { box-shadow: 0 6px 40px rgba(214,158,46,0.8); }
+    }
+
+    #pinDisplay {
+      font-size: 52px;
+      letter-spacing: 20px;
+      padding: 20px 0;
+      color: #2d3748;
+      font-weight: 700;
+    }
+    #pinPad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 8px;
+    }
+    .pad {
+      padding: 24px 0;
+      font-size: 28px;
+      font-weight: 700;
+      border: 2px solid #cbd5e0;
+      background: #fff;
+      border-radius: 14px;
+      color: #2d3748;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pad:active { background: #e2e8f0; transform: scale(0.96); }
+    .pad-clear, .pad-back { font-size: 20px; color: #4a5568; }
+    #pinHint { margin-top: 16px; color: #4a5568; font-size: 16px; }
+    #pinHint.err { color: #c53030; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🌿 Memory Chat</h1>
-    <p class="greet" id="greet">Tap the button when you're ready</p>
+    <h1>Memory Chat</h1>
+    <p class="greet" id="greet">Please enter your number</p>
 
-    <button id="talkBtn" onclick="startSession()">
-      <span class="icon">🎙️</span>
-      <span id="btnLabel">Tap to Chat</span>
-    </button>
+    <!-- PIN gate — shown first -->
+    <div id="pinGate">
+      <div id="pinDisplay">----</div>
+      <div id="pinPad">
+        <button class="pad" data-d="1">1</button>
+        <button class="pad" data-d="2">2</button>
+        <button class="pad" data-d="3">3</button>
+        <button class="pad" data-d="4">4</button>
+        <button class="pad" data-d="5">5</button>
+        <button class="pad" data-d="6">6</button>
+        <button class="pad" data-d="7">7</button>
+        <button class="pad" data-d="8">8</button>
+        <button class="pad" data-d="9">9</button>
+        <button class="pad pad-clear" id="pinClear">Clear</button>
+        <button class="pad" data-d="0">0</button>
+        <button class="pad pad-back" id="pinBack">←</button>
+      </div>
+      <p id="pinHint">Enter 4 numbers</p>
+    </div>
 
-    <div id="status">Ready when you are</div>
-    <div id="transcript"></div>
-    <button id="endBtn" onclick="endSession()">Finish Chat</button>
+    <!-- Chat controls — hidden until PIN verified -->
+    <div id="chatControls" style="display:none">
+      <button id="talkBtn" onclick="startSession()">
+        <span class="icon">🎤</span>
+        <span id="btnLabel">Tap to Chat</span>
+      </button>
+      <div id="status">Ready when you are</div>
+      <div id="transcript"></div>
+      <button id="endBtn" onclick="endSession()">Finish Chat</button>
+    </div>
   </div>
   <script src="/app.js"></script>
 </body>

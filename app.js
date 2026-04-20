@@ -24,6 +24,71 @@ const el = {
   endBtn    : document.getElementById('endBtn')
 };
 
+// ── PIN gate ──────────────────────────────────────────────────────────────────
+const pinState = { buf: '', verified: false, token: null };
+
+function renderPin() {
+  const d = document.getElementById('pinDisplay');
+  const dots = pinState.buf.padEnd(4, '-').split('').map(c => c === '-' ? '-' : '•').join(' ');
+  d.textContent = dots;
+}
+
+function setPinHint(msg, isErr) {
+  const h = document.getElementById('pinHint');
+  h.textContent = msg;
+  h.classList.toggle('err', !!isErr);
+}
+
+async function submitPin() {
+  setPinHint('Checking…', false);
+  try {
+    const r = await fetch(`${API_BASE}/verify-pin`, {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({ person, pin: pinState.buf })
+    });
+    if (r.status === 429) {
+      setPinHint('Too many tries. Please try again later.', true);
+      return;
+    }
+    if (!r.ok) {
+      setPinHint('That doesn\'t look right — try again', true);
+      pinState.buf = '';
+      renderPin();
+      return;
+    }
+    const data = await r.json();
+    pinState.verified = true;
+    pinState.token    = data.token;
+    document.getElementById('pinGate').style.display     = 'none';
+    document.getElementById('chatControls').style.display = 'block';
+    el.greet.textContent = `Welcome back! Tap when you're ready`;
+  } catch {
+    setPinHint('Connection problem — try again in a moment', true);
+  }
+}
+
+// Wire up PIN pad
+document.querySelectorAll('.pad[data-d]').forEach(b => {
+  b.onclick = () => {
+    if (pinState.buf.length >= 4) return;
+    pinState.buf += b.dataset.d;
+    renderPin();
+    if (pinState.buf.length === 4) submitPin();
+  };
+});
+document.getElementById('pinClear').onclick = () => {
+  pinState.buf = '';
+  renderPin();
+  setPinHint('Enter 4 numbers', false);
+};
+document.getElementById('pinBack').onclick = () => {
+  pinState.buf = pinState.buf.slice(0, -1);
+  renderPin();
+};
+renderPin();
+// ─────────────────────────────────────────────────────────────────────────────
+
 let pc, dc, localStream, audioEl;
 let sessionStartTime = null;
 let maxSessionTimer  = null;
@@ -39,11 +104,10 @@ let seqCounter = 0;
     const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
     if (!r.ok) throw new Error('unhealthy');
     const names = { mum: 'Bev', dad: 'Tim', mil: 'Jan' };
-    el.greet.textContent = `Hi ${names[person] || 'there'}, tap when you're ready`;
+    el.greet.textContent = `Hi ${names[person] || 'there'}, please enter your number`;
   } catch {
-    el.greet.textContent  = 'Chat is unavailable right now';
-    el.status.textContent = 'Please try again a little later';
-    el.btn.classList.add('disabled');
+    el.greet.textContent = 'Chat is unavailable right now';
+    setPinHint('Please try again a little later', true);
   }
 })();
 
@@ -63,7 +127,7 @@ async function startSession() {
         'Content-Type'     : 'application/json',
         'x-session-secret' : SESSION_SECRET
       },
-      body: JSON.stringify({ person })
+      body: JSON.stringify({ person, pinToken: pinState.token })
     });
     if (!tokenResp.ok) throw new Error(`session-endpoint-${tokenResp.status}`);
     const { client_secret } = await tokenResp.json();
