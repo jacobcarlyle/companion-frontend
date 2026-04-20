@@ -94,6 +94,21 @@ let sessionStartTime = null;
 let maxSessionTimer  = null;
 let sessionEnded     = false;
 
+// Mic mute + thinking indicator (Improvement 2)
+let micMuted = false;
+function setMic(enabled) {
+  if (!localStream) return;
+  localStream.getAudioTracks().forEach(t => { t.enabled = enabled; });
+  micMuted = !enabled;
+}
+function showThinking(on) {
+  el.status.textContent = on ? 'Checking my notes…' : 'Chat continuing — just speak naturally';
+  el.btn.classList.toggle('thinking', on);
+}
+
+// Track accumulating function-call arguments by call_id
+const pendingCalls = new Map();       // call_id → { name, argsBuffer }
+
 // Keyed by item_id; seq preserves insertion order across concurrent events
 const transcriptItems = new Map();
 let seqCounter = 0;
@@ -193,6 +208,41 @@ function handleEvent(e) {
   let ev;
   try { ev = JSON.parse(e.data); } catch { return; }
 
+  // ── Function call start ──────────────────────────────────────
+  if (ev.type === 'response.output_item.added'
+      && ev.item && ev.item.type === 'function_call') {
+    pendingCalls.set(ev.item.call_id, { name: ev.item.name, argsBuffer: '' });
+    setMic(false);
+    showThinking(true);
+    return;
+  }
+
+  // ── Function call args streaming ─────────────────────────────
+  if (ev.type === 'response.function_call_arguments.delta') {
+    const c = pendingCalls.get(ev.call_id);
+    if (c) c.argsBuffer += (ev.delta || '');
+    return;
+  }
+
+  // ── Function call args complete — execute ────────────────────
+  if (ev.type === 'response.function_call_arguments.done') {
+    const c = pendingCalls.get(ev.call_id);
+    if (!c) return;
+    const args = (() => { try { return JSON.parse(c.argsBuffer || '{}'); } catch { return {}; } })();
+    executeFunctionCall(ev.call_id, c.name, args);
+    pendingCalls.delete(ev.call_id);
+    return;
+  }
+
+  // ── Full response done — unmute ──────────────────────────────
+  if (ev.type === 'response.done') {
+    if (micMuted) {
+      setMic(true);
+      showThinking(false);
+    }
+    return;
+  }
+
   // ──  Assistant transcript — GA event names ─────────────────────────────
   if (ev.type === 'response.output_audio_transcript.delta') {
     const id  = ev.item_id; if (!id) return;
@@ -220,6 +270,47 @@ function handleEvent(e) {
     render();
     return;
   }
+}
+
+async function executeFunctionCall(callId, name, args) {
+  let output;
+
+  if (name === 'search_vault') {
+    try {
+      const r = await fetch(`${API_BASE}/vault-search`, {
+        method : 'POST',
+        headers: {
+          'Content-Type'     : 'application/json',
+          'x-session-secret' : SESSION_SECRET
+        },
+        body: JSON.stringify({ person, query: args.query || '' })
+      });
+      if (!r.ok) throw new Error(`search-${r.status}`);
+      const data = await r.json();
+      output = JSON.stringify({
+        hits: (data.hits || []).map(h => ({
+          summary: h.summary, type: h.type, year: h.year, confidence: h.confidence
+        })),
+        note: data.note || null
+      });
+    } catch (err) {
+      console.error('[companion] search_vault failed:', err);
+      output = JSON.stringify({ hits: [], error: 'search unavailable' });
+    }
+  } else {
+    output = JSON.stringify({ error: 'unknown tool' });
+  }
+
+  dc.send(JSON.stringify({
+    type: 'conversation.item.create',
+    item: {
+      type   : 'function_call_output',
+      call_id: callId,
+      output
+    }
+  }));
+
+  dc.send(JSON.stringify({ type: 'response.create' }));
 }
 
 function orderedLines() {
