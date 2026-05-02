@@ -11,8 +11,8 @@ const INGEST_SECRET  = '5c84d4f156bf117a4828a542c8164fe5de387d050e4e76df4544240a
 const MAX_SESSION_MS = 30 * 60 * 1000;
 
 const params = new URLSearchParams(location.search);
-const person = ['mum','dad','mil','jacob','leanne','kye','sam','keira'].includes(params.get('person'))
-  ? params.get('person') : 'mum';
+const VALID_PERSONS = ['mum','dad','mil','jacob','leanne','kye','sam','keira'];
+const person = VALID_PERSONS.includes(params.get('person')) ? params.get('person') : null;
 
 const el = {
   card      : document.getElementById('card'),
@@ -164,11 +164,16 @@ let seqCounter = 0;
 
 // ──  Preflight: check backend reachability on page load ──────────────────
 (async () => {
+  if (!person) {
+    el.greet.textContent = 'This link isn\'t valid. Please check the address.';
+    document.getElementById('pinGate').style.display = 'none';
+    return;
+  }
   try {
     const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
     if (!r.ok) throw new Error('unhealthy');
     const names = { mum: 'Bev', dad: 'Tim', mil: 'Jan', jacob: 'Jacob', leanne: 'Leanne', kye: 'Kye', sam: 'Sam', keira: 'Keira' };
-    el.greet.textContent = `Hi ${names[person] || 'there'}, please enter your number`;
+    el.greet.textContent = `Hi ${names[person]}, please enter your number`;
   } catch {
     el.greet.textContent = 'Chat is unavailable right now';
     setPinHint('Please try again a little later', true);
