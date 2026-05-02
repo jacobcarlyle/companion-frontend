@@ -11,7 +11,7 @@ const INGEST_SECRET  = '5c84d4f156bf117a4828a542c8164fe5de387d050e4e76df4544240a
 const MAX_SESSION_MS = 30 * 60 * 1000;
 
 const params = new URLSearchParams(location.search);
-const person = ['mum','dad','mil'].includes(params.get('person'))
+const person = ['mum','dad','mil','jacob','leanne','kye','sam','keira'].includes(params.get('person'))
   ? params.get('person') : 'mum';
 
 const el = {
@@ -93,6 +93,8 @@ let pc, dc, localStream, audioEl;
 let sessionStartTime = null;
 let maxSessionTimer  = null;
 let sessionEnded     = false;
+let shadowSessionId  = null;
+let stopShadowTap    = null;
 
 // Mic mute + thinking indicator (Improvement 2)
 let micMuted = false;
@@ -104,6 +106,53 @@ function setMic(enabled) {
 function showThinking(on) {
   el.status.textContent = on ? 'Checking my notes…' : 'Chat continuing — just speak naturally';
   el.btn.classList.toggle('thinking', on);
+}
+
+async function startShadowSttTap(stream, opts) {
+  try {
+    const ctx = new AudioContext({ sampleRate: 48000 });
+    await ctx.audioWorklet.addModule('/pcm-resampler-worklet.js');
+    const src = ctx.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(ctx, 'pcm-resampler');
+    const wsBase = API_BASE.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    const ws = new WebSocket(
+      `${wsBase}/shadow-stt?personId=${encodeURIComponent(opts.personId)}`
+        + `&sessionId=${encodeURIComponent(opts.sessionId)}`
+    );
+    ws.binaryType = 'arraybuffer';
+
+    node.port.onmessage = e => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    };
+
+    src.connect(node);
+
+    return function stopShadow() {
+      try { ws.close(); } catch (_) {}
+      try { node.disconnect(); } catch (_) {}
+      try { src.disconnect(); } catch (_) {}
+      try { ctx.close(); } catch (_) {}
+    };
+  } catch (err) {
+    console.warn('[shadow-stt] tap failed (non-fatal):', err);
+    return function noop() {};
+  }
+}
+
+function mirrorWhisperFinal(transcript) {
+  if (!shadowSessionId || !transcript) return;
+  fetch(`${API_BASE}/shadow-stt/whisper`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-session-secret': SESSION_SECRET
+    },
+    body: JSON.stringify({
+      personId: person,
+      sessionId: shadowSessionId,
+      transcript
+    })
+  }).catch(err => console.warn('[shadow-stt] whisper mirror failed:', err));
 }
 
 // Track accumulating function-call arguments by call_id
@@ -118,7 +167,7 @@ let seqCounter = 0;
   try {
     const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
     if (!r.ok) throw new Error('unhealthy');
-    const names = { mum: 'Bev', dad: 'Tim', mil: 'Jan' };
+    const names = { mum: 'Bev', dad: 'Tim', mil: 'Jan', jacob: 'Jacob', leanne: 'Leanne', kye: 'Kye', sam: 'Sam', keira: 'Keira' };
     el.greet.textContent = `Hi ${names[person] || 'there'}, please enter your number`;
   } catch {
     el.greet.textContent = 'Chat is unavailable right now';
@@ -134,6 +183,11 @@ async function startSession() {
   try {
     el.status.textContent = 'Asking for microphone permission...';
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    shadowSessionId = `rt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    stopShadowTap = await startShadowSttTap(localStream, {
+      personId: person,
+      sessionId: shadowSessionId
+    });
 
     el.status.textContent = 'Connecting...';
     const tokenResp = await fetch(`${API_BASE}/session`, {
@@ -266,6 +320,7 @@ function handleEvent(e) {
     const id   = ev.item_id; if (!id) return;
     const text = (ev.transcript || '').trim();
     if (!text) return;
+    mirrorWhisperFinal(text);
     transcriptItems.set(id, { role: 'user', text, ts: Date.now(), seq: seqCounter++ });
     render();
     return;
@@ -345,6 +400,8 @@ async function endSession() {
   try {
     if (dc && dc.readyState === 'open') dc.close();
     if (pc) pc.close();
+    if (typeof stopShadowTap === 'function') stopShadowTap();
+    stopShadowTap = null;
     if (localStream) localStream.getTracks().forEach(t => t.stop());
     if (audioEl) audioEl.srcObject = null;
   } catch (e) { console.warn('[companion] cleanup warning:', e); }
