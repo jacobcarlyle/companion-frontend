@@ -337,22 +337,30 @@ async function executeFunctionCall(callId, name, args) {
 
   if (name === 'search_vault') {
     try {
+      const body = { person, query: args.query || '' };
+      if (args.type)    body.type    = args.type;
+      if (args.section) body.section = args.section;
       const r = await fetch(`${API_BASE}/vault-search`, {
         method : 'POST',
         headers: {
           'Content-Type'     : 'application/json',
           'x-session-secret' : SESSION_SECRET
         },
-        body: JSON.stringify({ person, query: args.query || '' })
+        body: JSON.stringify(body)
       });
       if (!r.ok) throw new Error(`search-${r.status}`);
       const data = await r.json();
-      output = JSON.stringify({
-        hits: (data.hits || []).map(h => ({
-          summary: h.summary, type: h.type, year: h.year, confidence: h.confidence
-        })),
-        note: data.note || null
-      });
+      // section_read and retrieval both return .answer; legacy path returns .hits
+      if (data.answer !== undefined) {
+        output = JSON.stringify({ answer: data.answer, source: data.source || 'unknown' });
+      } else {
+        output = JSON.stringify({
+          hits: (data.hits || []).map(h => ({
+            summary: h.summary, type: h.type, year: h.year, confidence: h.confidence
+          })),
+          note: data.note || null
+        });
+      }
     } catch (err) {
       console.error('[companion] search_vault failed:', err);
       output = JSON.stringify({ hits: [], error: 'search unavailable' });
