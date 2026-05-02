@@ -61,11 +61,152 @@ async function submitPin() {
     pinState.verified = true;
     pinState.token    = data.token;
     document.getElementById('pinGate').style.display     = 'none';
-    document.getElementById('chatControls').style.display = 'block';
-    el.greet.textContent = `Welcome back! Tap when you're ready`;
+    await prepareChatAfterPin();
   } catch {
     setPinHint('Connection problem — try again in a moment', true);
   }
+}
+
+async function fetchVoiceConfig() {
+  const r = await fetch(`${API_BASE}/elder-voice-config?personId=${encodeURIComponent(person)}`, {
+    cache: 'no-store'
+  });
+  if (!r.ok) throw new Error(`voice-config-${r.status}`);
+  return r.json();
+}
+
+async function prepareChatAfterPin() {
+  document.getElementById('chatControls').style.display = 'block';
+  el.status.textContent = 'Getting things ready...';
+  try {
+    currentVoiceConfig = await fetchVoiceConfig();
+  } catch (err) {
+    console.warn('[companion] voice config unavailable, using Realtime:', err);
+    currentVoiceConfig = { cascade_enabled: false };
+  }
+
+  if (currentVoiceConfig.cascade_enabled) {
+    await setupCascadeControls(currentVoiceConfig);
+  } else {
+    setupRealtimeControls(currentVoiceConfig);
+  }
+}
+
+function setupRealtimeControls(cfg) {
+  activeMode = 'realtime';
+  const name = cfg.person_name || ({ mum: 'Bev', dad: 'Tim', mil: 'Jan', jacob: 'Jacob', leanne: 'Leanne', kye: 'Kye', sam: 'Sam', keira: 'Keira' }[person] || 'there');
+  el.greet.textContent = `Welcome back, ${name}. Tap when you're ready`;
+  el.btn.className = '';
+  el.btn.removeAttribute('data-state');
+  el.btn.classList.remove('disabled', 'listening', 'thinking');
+  el.btnLabel.textContent = 'Tap to Chat';
+  el.status.textContent = 'Ready when you are';
+  el.transcript.style.display = 'none';
+  el.endBtn.style.display = 'none';
+  el.btn.onclick = startSession;
+}
+
+async function setupCascadeControls(cfg) {
+  activeMode = 'cascade';
+  sessionEnded = false;
+  sessionStartTime = null;
+  transcriptItems.clear();
+  cascadeAssistantItemId = null;
+
+  const name = cfg.person_name || 'there';
+  el.greet.textContent = `Hello, ${name}`;
+  el.transcript.innerHTML = '';
+  el.transcript.style.display = 'block';
+  el.endBtn.style.display = 'block';
+  el.endBtn.disabled = false;
+  el.endBtn.onclick = endSession;
+  el.btn.className = '';
+  el.btn.dataset.state = 'idle';
+  el.btnLabel.textContent = 'Tap to talk';
+  el.status.textContent = 'Tap to talk to me';
+  el.btn.classList.add('disabled');
+
+  cascadeClient = new CascadeVoiceClient({ personId: person, baseUrl: API_BASE });
+  try {
+    await cascadeClient.init();
+  } catch (err) {
+    console.error('[companion] cascade init failed:', err);
+    el.status.textContent = 'Could not start the microphone. Please try again.';
+    el.btn.classList.remove('disabled');
+    el.btnLabel.textContent = 'Try Again';
+    el.btn.onclick = () => setupCascadeControls(cfg);
+    return;
+  }
+
+  const labels = {
+    idle: ['Tap to talk', 'Tap to talk to me'],
+    listening: ['Tap when done', "I'm listening"],
+    thinking: ['...', 'Just a moment'],
+    speaking: ['Speaking', `${name} is speaking`],
+  };
+
+  cascadeClient.addEventListener('state', e => {
+    const state = e.detail;
+    el.btn.dataset.state = state;
+    const [buttonText, statusText] = labels[state] || labels.idle;
+    el.btnLabel.textContent = buttonText;
+    el.status.textContent = statusText;
+    el.btn.classList.toggle('disabled', state === 'thinking' || state === 'speaking');
+  });
+
+  cascadeClient.addEventListener('transcript', e => {
+    if (!sessionStartTime) sessionStartTime = Date.now();
+    const text = (e.detail || '').trim();
+    if (!text) return;
+    transcriptItems.set(`cascade-user-${Date.now()}`, {
+      role: 'user',
+      text,
+      ts: Date.now(),
+      seq: seqCounter++,
+    });
+    cascadeAssistantItemId = `cascade-assistant-${Date.now()}`;
+    transcriptItems.set(cascadeAssistantItemId, {
+      role: 'assistant',
+      text: '',
+      ts: Date.now(),
+      seq: seqCounter++,
+    });
+    render();
+  });
+
+  cascadeClient.addEventListener('token', e => {
+    if (!cascadeAssistantItemId) {
+      cascadeAssistantItemId = `cascade-assistant-${Date.now()}`;
+      transcriptItems.set(cascadeAssistantItemId, {
+        role: 'assistant',
+        text: '',
+        ts: Date.now(),
+        seq: seqCounter++,
+      });
+    }
+    const cur = transcriptItems.get(cascadeAssistantItemId);
+    cur.text += e.detail || '';
+    cur.ts = Date.now();
+    transcriptItems.set(cascadeAssistantItemId, cur);
+    render();
+  });
+
+  cascadeClient.addEventListener('done', () => {
+    cascadeAssistantItemId = null;
+    render();
+  });
+
+  cascadeClient.addEventListener('error', e => {
+    console.error('[companion] cascade error:', e.detail);
+    el.status.textContent = "Sorry, I couldn't hear that. Try again?";
+  });
+
+  el.btn.classList.remove('disabled');
+  el.btn.onclick = () => {
+    if (!sessionStartTime) sessionStartTime = Date.now();
+    if (cascadeClient.state === 'idle') cascadeClient.startTurn();
+    else if (cascadeClient.state === 'listening') cascadeClient.endTurn();
+  };
 }
 
 // Wire up PIN pad
@@ -95,6 +236,142 @@ let maxSessionTimer  = null;
 let sessionEnded     = false;
 let shadowSessionId  = null;
 let stopShadowTap    = null;
+let activeMode       = 'realtime';
+let cascadeClient    = null;
+let currentVoiceConfig = null;
+let cascadeAssistantItemId = null;
+
+class CascadeVoiceClient extends EventTarget {
+  constructor({ personId, baseUrl }) {
+    super();
+    this.personId = personId;
+    this.baseUrl = baseUrl;
+    this.state = 'idle';
+    this.outQueueTime = 0;
+    this.doneReceived = false;
+  }
+
+  _setState(state) {
+    this.state = state;
+    this.dispatchEvent(new CustomEvent('state', { detail: state }));
+  }
+
+  async init() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+    });
+    this.ctx = new AudioContextCtor({ sampleRate: 48000 });
+    await this.ctx.audioWorklet.addModule('/pcm-resampler-worklet.js');
+    this.src = this.ctx.createMediaStreamSource(this.stream);
+    this.worklet = new AudioWorkletNode(this.ctx, 'pcm-resampler');
+    this.outCtx = new AudioContextCtor({ sampleRate: 16000 });
+    this._setState('idle');
+  }
+
+  async startTurn() {
+    if (this.state !== 'idle') return;
+    if (this.ctx?.state === 'suspended') await this.ctx.resume();
+    if (this.outCtx?.state === 'suspended') await this.outCtx.resume();
+
+    this.doneReceived = false;
+    this.outQueueTime = this.outCtx.currentTime;
+    this._setState('listening');
+
+    const wsBase = this.baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    const wsUrl = `${wsBase}/turn?personId=${encodeURIComponent(this.personId)}&sessionId=cas-${Date.now()}`;
+    this.ws = new WebSocket(wsUrl);
+    this.ws.binaryType = 'arraybuffer';
+
+    this.ws.onopen = () => {
+      this.worklet.port.onmessage = e => {
+        if (this.ws?.readyState === WebSocket.OPEN && this.state === 'listening') {
+          this.ws.send(e.data);
+        }
+      };
+      this.src.connect(this.worklet);
+    };
+
+    this.ws.onmessage = ev => {
+      if (typeof ev.data === 'string') {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        if (msg.type === 'transcript') {
+          this.dispatchEvent(new CustomEvent('transcript', { detail: msg.transcript }));
+          this._setState('thinking');
+        } else if (msg.type === 'token') {
+          this.dispatchEvent(new CustomEvent('token', { detail: msg.token || '' }));
+        } else if (msg.type === 'done') {
+          this.doneReceived = true;
+          this.dispatchEvent(new CustomEvent('done', { detail: msg.latencies || {} }));
+          this._maybeReturnIdle();
+        } else if (msg.type === 'error') {
+          this.dispatchEvent(new CustomEvent('error', { detail: msg.error || 'turn failed' }));
+          this._teardownTurn();
+        }
+        return;
+      }
+
+      if (this.state !== 'speaking') this._setState('speaking');
+      this._playPcmChunk(new Int16Array(ev.data));
+    };
+
+    this.ws.onclose = () => this._maybeReturnIdle();
+    this.ws.onerror = () => {
+      this.dispatchEvent(new CustomEvent('error', { detail: 'connection problem' }));
+      this._teardownTurn();
+    };
+  }
+
+  endTurn() {
+    if (this.state !== 'listening') return;
+    try { this.src.disconnect(this.worklet); } catch (_) {}
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'end' }));
+    }
+    this._setState('thinking');
+  }
+
+  destroy() {
+    this._teardownTurn();
+    try { this.stream?.getTracks().forEach(t => t.stop()); } catch (_) {}
+    try { this.ctx?.close(); } catch (_) {}
+    try { this.outCtx?.close(); } catch (_) {}
+  }
+
+  _teardownTurn() {
+    try { this.ws?.close(); } catch (_) {}
+    try { this.src?.disconnect(); } catch (_) {}
+    try { this.worklet?.disconnect(); } catch (_) {}
+    this._setState('idle');
+  }
+
+  _playPcmChunk(int16) {
+    const float = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
+    const audioBuffer = this.outCtx.createBuffer(1, float.length, 16000);
+    audioBuffer.getChannelData(0).set(float);
+
+    const src = this.outCtx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(this.outCtx.destination);
+
+    const now = this.outCtx.currentTime;
+    const start = Math.max(now, this.outQueueTime);
+    src.start(start);
+    this.outQueueTime = start + audioBuffer.duration;
+    src.onended = () => this._maybeReturnIdle();
+  }
+
+  _maybeReturnIdle() {
+    if (!this.doneReceived) return;
+    const delayMs = Math.max(0, (this.outQueueTime - this.outCtx.currentTime) * 1000) + 40;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (this.doneReceived && this.state !== 'listening') this._setState('idle');
+    }, delayMs);
+  }
+}
 
 // Mic mute + thinking indicator (Improvement 2)
 let micMuted = false;
@@ -181,6 +458,7 @@ let seqCounter = 0;
 })();
 
 async function startSession() {
+  activeMode = 'realtime';
   if (sessionEnded) { location.reload(); return; }
   el.btn.onclick = null;
   el.btn.classList.add('disabled');
@@ -411,6 +689,10 @@ async function endSession() {
 
   // Clean up WebRTC
   try {
+    if (activeMode === 'cascade' && cascadeClient) {
+      cascadeClient.destroy();
+      cascadeClient = null;
+    }
     if (dc && dc.readyState === 'open') dc.close();
     if (pc) pc.close();
     if (typeof stopShadowTap === 'function') stopShadowTap();

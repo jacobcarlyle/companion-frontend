@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Settings</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f6f7f9;
+      color: #172033;
+      min-height: 100vh;
+      padding: 28px;
+    }
+    main {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      font-size: 30px;
+      margin: 0;
+    }
+    #status {
+      min-height: 24px;
+      color: #526070;
+      font-size: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid #d7dde5;
+    }
+    th, td {
+      padding: 14px;
+      border-bottom: 1px solid #e5e9ee;
+      text-align: left;
+      vertical-align: middle;
+    }
+    th {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #526070;
+      background: #eef2f6;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .name {
+      font-size: 19px;
+      font-weight: 700;
+    }
+    .sub {
+      margin-top: 4px;
+      color: #667386;
+      font-size: 13px;
+      word-break: break-all;
+    }
+    select, button {
+      min-height: 44px;
+      border-radius: 8px;
+      border: 1px solid #bac4d0;
+      background: #fff;
+      color: #172033;
+      font-size: 16px;
+      padding: 0 12px;
+    }
+    select {
+      width: 100%;
+      min-width: 210px;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button.primary {
+      background: #256b55;
+      color: #fff;
+      border-color: #256b55;
+    }
+    button:disabled {
+      background: #d9dee6;
+      color: #6d7684;
+      border-color: #d9dee6;
+      cursor: not-allowed;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .switch input {
+      width: 24px;
+      height: 24px;
+    }
+    @media (max-width: 760px) {
+      body { padding: 16px; }
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { display: none; }
+      tr {
+        border: 1px solid #d7dde5;
+        margin-bottom: 12px;
+        background: #fff;
+      }
+      td {
+        border-bottom: 0;
+        padding: 10px 12px;
+      }
+      td::before {
+        content: attr(data-label);
+        display: block;
+        color: #526070;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Voice Settings</h1>
+      <div id="status">Loading voices...</div>
+    </header>
+    <table>
+      <thead>
+        <tr>
+          <th>Person</th>
+          <th>Provider</th>
+          <th>Voice</th>
+          <th>Push-to-talk</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="voiceRows"></tbody>
+    </table>
+  </main>
+
+  <script>
+    const API_BASE = 'https://api.carlyle.me';
+    const SESSION_SECRET = '99656fd155883d95b87a6a9984eba1d8ad643b8c83eb2f9756ecc55f281d174c';
+    const PEOPLE_ORDER = ['mum', 'dad', 'mil', 'jacob', 'leanne', 'kye', 'sam', 'keira'];
+    const statusEl = document.getElementById('status');
+    const rowsEl = document.getElementById('voiceRows');
+    let options = {};
+    let settings = {};
+    let audioCtx = null;
+
+    function headers(extra) {
+      return Object.assign({
+        'Content-Type': 'application/json',
+        'x-session-secret': SESSION_SECRET
+      }, extra || {});
+    }
+
+    async function load() {
+      try {
+        const [settingsRes, optionsRes] = await Promise.all([
+          fetch(`${API_BASE}/admin/voice`, { headers: headers() }),
+          fetch(`${API_BASE}/admin/voice/options`, { headers: headers() })
+        ]);
+        if (!settingsRes.ok || !optionsRes.ok) throw new Error('voice settings unavailable');
+        settings = (await settingsRes.json()).people || {};
+        options = await optionsRes.json();
+        render();
+        statusEl.textContent = 'Ready';
+      } catch (err) {
+        statusEl.textContent = 'Could not load voice settings.';
+        console.error(err);
+      }
+    }
+
+    function render() {
+      rowsEl.innerHTML = PEOPLE_ORDER
+        .filter(personId => settings[personId])
+        .map(personId => rowHtml(personId, settings[personId]))
+        .join('');
+
+      rowsEl.querySelectorAll('[data-provider]').forEach(select => {
+        select.addEventListener('change', () => refreshVoiceSelect(select.dataset.provider));
+      });
+      rowsEl.querySelectorAll('[data-listen]').forEach(button => {
+        button.addEventListener('click', () => playSample(button.dataset.listen));
+      });
+      rowsEl.querySelectorAll('[data-save]').forEach(button => {
+        button.addEventListener('click', () => savePerson(button.dataset.save));
+      });
+    }
+
+    function rowHtml(personId, person) {
+      const provider = person.provider || 'cartesia';
+      return `
+        <tr>
+          <td data-label="Person">
+            <div class="name">${escapeHtml(person.person_name || personId)}</div>
+            <div class="sub">${escapeHtml(personId)}</div>
+          </td>
+          <td data-label="Provider">
+            <select id="${personId}-provider" data-provider="${personId}">
+              <option value="cartesia"${provider === 'cartesia' ? ' selected' : ''}>Cartesia</option>
+              <option value="elevenlabs"${provider === 'elevenlabs' ? ' selected' : ''}>ElevenLabs</option>
+            </select>
+          </td>
+          <td data-label="Voice">
+            <select id="${personId}-voice">${voiceOptionsHtml(provider, person.voice_id)}</select>
+            <div class="sub">${escapeHtml(person.voice_id || 'No voice selected')}</div>
+          </td>
+          <td data-label="Push-to-talk">
+            <label class="switch">
+              <input id="${personId}-cascade" type="checkbox"${person.cascade_enabled ? ' checked' : ''}>
+              Cascade
+            </label>
+          </td>
+          <td data-label="Actions">
+            <div class="actions">
+              <button data-listen="${personId}">Listen</button>
+              <button class="primary" data-save="${personId}">Use this voice</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    function voiceOptionsHtml(provider, selectedId) {
+      return (options[provider] || []).map(opt =>
+        `<option value="${escapeAttr(opt.id)}"${opt.id === selectedId ? ' selected' : ''}>${escapeHtml(opt.label)}</option>`
+      ).join('');
+    }
+
+    function refreshVoiceSelect(personId) {
+      const provider = document.getElementById(`${personId}-provider`).value;
+      const current = settings[personId] || {};
+      document.getElementById(`${personId}-voice`).innerHTML = voiceOptionsHtml(provider, current.voice_id);
+    }
+
+    async function playSample(personId) {
+      const provider = document.getElementById(`${personId}-provider`).value;
+      const voiceId = document.getElementById(`${personId}-voice`).value;
+      statusEl.textContent = 'Generating sample...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/voice/sample`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ provider, voice_id: voiceId })
+        });
+        if (!res.ok) throw new Error(`sample-${res.status}`);
+        const pcm = new Int16Array(await res.arrayBuffer());
+        await playPcm(pcm);
+        statusEl.textContent = 'Sample played';
+      } catch (err) {
+        statusEl.textContent = 'Could not play that sample.';
+        console.error(err);
+      }
+    }
+
+    async function playPcm(int16) {
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      audioCtx = audioCtx || new AudioContextCtor({ sampleRate: 16000 });
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      const float = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
+      const buffer = audioCtx.createBuffer(1, float.length, 16000);
+      buffer.getChannelData(0).set(float);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+      src.start();
+    }
+
+    async function savePerson(personId) {
+      const body = {
+        personId,
+        provider: document.getElementById(`${personId}-provider`).value,
+        voice_id: document.getElementById(`${personId}-voice`).value,
+        cascade_enabled: document.getElementById(`${personId}-cascade`).checked
+      };
+
+      statusEl.textContent = 'Saving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/voice`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`save-${res.status}`);
+        const saved = await res.json();
+        settings[personId] = Object.assign({}, settings[personId], saved.elder);
+        render();
+        statusEl.textContent = 'Saved';
+      } catch (err) {
+        statusEl.textContent = 'Could not save voice settings.';
+        console.error(err);
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/`/g, '&#96;');
+    }
+
+    load();
+  </script>
+</body>
+</html>
