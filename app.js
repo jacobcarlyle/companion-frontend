@@ -249,6 +249,8 @@ class CascadeVoiceClient extends EventTarget {
     this.state = 'idle';
     this.outQueueTime = 0;
     this.doneReceived = false;
+    this.playbackPrimed = false;
+    this.jitterBufferSeconds = 0.18;
   }
 
   _setState(state) {
@@ -275,7 +277,8 @@ class CascadeVoiceClient extends EventTarget {
     if (this.outCtx?.state === 'suspended') await this.outCtx.resume();
 
     this.doneReceived = false;
-    this.outQueueTime = this.outCtx.currentTime;
+    this.playbackPrimed = false;
+    this.outQueueTime = 0;
     this._setState('listening');
 
     const wsBase = this.baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
@@ -313,7 +316,7 @@ class CascadeVoiceClient extends EventTarget {
       }
 
       if (this.state !== 'speaking') this._setState('speaking');
-      this._playPcmChunk(new Int16Array(ev.data));
+      this._playPcmChunk(ev.data);
     };
 
     this.ws.onclose = () => this._maybeReturnIdle();
@@ -346,7 +349,17 @@ class CascadeVoiceClient extends EventTarget {
     this._setState('idle');
   }
 
-  _playPcmChunk(int16) {
+  _playPcmChunk(arrayBuffer) {
+    const byteLength = arrayBuffer.byteLength - (arrayBuffer.byteLength % 2);
+    if (byteLength <= 0) return;
+
+    const view = new DataView(arrayBuffer, 0, byteLength);
+    const samples = byteLength / 2;
+    const int16 = new Int16Array(samples);
+    for (let i = 0; i < samples; i++) {
+      int16[i] = view.getInt16(i * 2, true);
+    }
+
     const float = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
     const audioBuffer = this.outCtx.createBuffer(1, float.length, 16000);
@@ -354,10 +367,21 @@ class CascadeVoiceClient extends EventTarget {
 
     const src = this.outCtx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(this.outCtx.destination);
+    const gain = this.outCtx.createGain();
+    src.connect(gain);
+    gain.connect(this.outCtx.destination);
 
     const now = this.outCtx.currentTime;
-    const start = Math.max(now, this.outQueueTime);
+    if (!this.playbackPrimed || this.outQueueTime < now + 0.02) {
+      this.outQueueTime = now + this.jitterBufferSeconds;
+      this.playbackPrimed = true;
+    }
+    const start = this.outQueueTime;
+    const fade = Math.min(0.004, audioBuffer.duration / 3);
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(1, start + fade);
+    gain.gain.setValueAtTime(1, Math.max(start + fade, start + audioBuffer.duration - fade));
+    gain.gain.linearRampToValueAtTime(0, start + audioBuffer.duration);
     src.start(start);
     this.outQueueTime = start + audioBuffer.duration;
     src.onended = () => this._maybeReturnIdle();
