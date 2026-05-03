@@ -381,11 +381,9 @@ class CascadeVoiceClient extends EventTarget {
       this.playbackPrimed = true;
     }
     const start = this.outQueueTime;
-    const fade = Math.min(0.004, audioBuffer.duration / 3);
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(1, start + fade);
-    gain.gain.setValueAtTime(1, Math.max(start + fade, start + audioBuffer.duration - fade));
-    gain.gain.linearRampToValueAtTime(0, start + audioBuffer.duration);
+    // No per-chunk fade: PCM chunks are continuous audio, fading between them
+    // creates audible amplitude dips at chunk boundaries. GainNode stays in the
+    // chain at default gain 1.0 so future per-turn fade in/out can be added cleanly.
     src.start(start);
     this.outQueueTime = start + audioBuffer.duration;
     src.onended = () => this._maybeReturnIdle();
