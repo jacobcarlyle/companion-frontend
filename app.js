@@ -267,11 +267,19 @@ class CascadeVoiceClient extends EventTarget {
     await this.ctx.audioWorklet.addModule('/pcm-resampler-worklet.js');
     this.src = this.ctx.createMediaStreamSource(this.stream);
     this.worklet = new AudioWorkletNode(this.ctx, 'pcm-resampler');
-    // Use browser-native sample rate (typically 44100 or 48000).
-    // Audio buffers are tagged as 16000 Hz so Web Audio resamples internally
-    // using its high-quality SRC — far cleaner than forcing 16 kHz through
-    // the OS hardware path which produces static on macOS.
-    this.outCtx = new AudioContextCtor();
+    // Run the output AudioContext at the same rate as the PCM stream (16 kHz)
+    // so Web Audio does NOT resample. Resampling each AudioBufferSourceNode
+    // independently introduces phase/amplitude discontinuities at chunk
+    // boundaries that are audible as clicks (~1–2s cadence on Cartesia).
+    // Fall back to native rate if the browser rejects 16 kHz; in that case
+    // boundary clicks may return until we replace the per-chunk scheduling
+    // with an AudioWorklet-based player.
+    try {
+      this.outCtx = new AudioContextCtor({ sampleRate: 16000 });
+    } catch (err) {
+      console.warn('[cascade] 16 kHz AudioContext rejected; falling back to native rate (may cause boundary clicks):', err);
+      this.outCtx = new AudioContextCtor();
+    }
     this._setState('idle');
   }
 
