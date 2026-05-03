@@ -267,7 +267,11 @@ class CascadeVoiceClient extends EventTarget {
     await this.ctx.audioWorklet.addModule('/pcm-resampler-worklet.js');
     this.src = this.ctx.createMediaStreamSource(this.stream);
     this.worklet = new AudioWorkletNode(this.ctx, 'pcm-resampler');
-    this.outCtx = new AudioContextCtor({ sampleRate: 16000 });
+    // Use browser-native sample rate (typically 44100 or 48000).
+    // Audio buffers are tagged as 16000 Hz so Web Audio resamples internally
+    // using its high-quality SRC — far cleaner than forcing 16 kHz through
+    // the OS hardware path which produces static on macOS.
+    this.outCtx = new AudioContextCtor();
     this._setState('idle');
   }
 
