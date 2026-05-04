@@ -242,10 +242,8 @@ let currentVoiceConfig = null;
 let cascadeAssistantItemId = null;
 
 class CascadeVoiceClient extends EventTarget {
-  // VERSION: A10-diagnostic
   constructor({ personId, baseUrl }) {
     super();
-    console.log('[cascade] app.js version: A10-diagnostic, compiled', new Date().toISOString());
     this.personId = personId;
     this.baseUrl = baseUrl;
     this.state = 'idle';
@@ -280,7 +278,6 @@ class CascadeVoiceClient extends EventTarget {
       console.warn('[cascade] 16 kHz AudioContext rejected; falling back to native rate (may cause boundary clicks):', err);
       this.outCtx = new AudioContextCtor();
     }
-    console.log('[cascade] outCtx sampleRate:', this.outCtx.sampleRate);
     this._setState('idle');
   }
 
