@@ -287,7 +287,7 @@ class CascadeVoiceClient extends EventTarget {
     if (this.outCtx?.state === 'suspended') await this.outCtx.resume();
 
     this.doneReceived = false;
-    this.outQueueTime = 0;
+    this.outQueueTime = this.outCtx.currentTime;
     this._setState('listening');
 
     const wsBase = this.baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
@@ -376,21 +376,10 @@ class CascadeVoiceClient extends EventTarget {
 
     const src = this.outCtx.createBufferSource();
     src.buffer = audioBuffer;
-    const gain = this.outCtx.createGain();
-    src.connect(gain);
-    gain.connect(this.outCtx.destination);
+    src.connect(this.outCtx.destination);
 
     const now = this.outCtx.currentTime;
-    // If the queue has fallen behind (late chunk delivery), clamp to 20ms ahead
-    // of now rather than jumping forward by 180ms — the 180ms gap was audible
-    // as a crack every ~1-2s on Cartesia's chunk cadence.
-    if (this.outQueueTime < now) {
-      this.outQueueTime = now + 0.02;
-    }
-    const start = this.outQueueTime;
-    // No per-chunk fade: PCM chunks are continuous audio, fading between them
-    // creates audible amplitude dips at chunk boundaries. GainNode stays in the
-    // chain at default gain 1.0 so future per-turn fade in/out can be added cleanly.
+    const start = Math.max(now, this.outQueueTime);
     src.start(start);
     this.outQueueTime = start + audioBuffer.duration;
     src.onended = () => this._maybeReturnIdle();
