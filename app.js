@@ -242,8 +242,10 @@ let currentVoiceConfig = null;
 let cascadeAssistantItemId = null;
 
 class CascadeVoiceClient extends EventTarget {
+  // VERSION: A10-diagnostic
   constructor({ personId, baseUrl }) {
     super();
+    console.log('[cascade] app.js version: A10-diagnostic, compiled', new Date().toISOString());
     this.personId = personId;
     this.baseUrl = baseUrl;
     this.state = 'idle';
