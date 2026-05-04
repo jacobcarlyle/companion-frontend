@@ -280,6 +280,7 @@ class CascadeVoiceClient extends EventTarget {
       console.warn('[cascade] 16 kHz AudioContext rejected; falling back to native rate (may cause boundary clicks):', err);
       this.outCtx = new AudioContextCtor();
     }
+    console.log('[cascade] outCtx sampleRate:', this.outCtx.sampleRate);
     this._setState('idle');
   }
 
