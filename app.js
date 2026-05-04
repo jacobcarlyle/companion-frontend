@@ -327,7 +327,7 @@ class CascadeVoiceClient extends EventTarget {
       }
 
       if (this.state !== 'speaking') this._setState('speaking');
-      this._playPcmChunk(ev.data);
+      this._playPcmChunk(new Int16Array(ev.data));
     };
 
     this.ws.onclose = () => this._maybeReturnIdle();
@@ -360,17 +360,7 @@ class CascadeVoiceClient extends EventTarget {
     this._setState('idle');
   }
 
-  _playPcmChunk(arrayBuffer) {
-    const byteLength = arrayBuffer.byteLength - (arrayBuffer.byteLength % 2);
-    if (byteLength <= 0) return;
-
-    const view = new DataView(arrayBuffer, 0, byteLength);
-    const samples = byteLength / 2;
-    const int16 = new Int16Array(samples);
-    for (let i = 0; i < samples; i++) {
-      int16[i] = view.getInt16(i * 2, true);
-    }
-
+  _playPcmChunk(int16) {
     const float = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
     const audioBuffer = this.outCtx.createBuffer(1, float.length, 16000);
