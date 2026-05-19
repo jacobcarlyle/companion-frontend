@@ -291,7 +291,9 @@ class CascadeVoiceClient extends EventTarget {
     this._setState('listening');
 
     const wsBase = this.baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
-    const wsUrl = `${wsBase}/turn?personId=${encodeURIComponent(this.personId)}&sessionId=cas-${Date.now()}`;
+    const providerParam = new URLSearchParams(window.location.search).get('provider');
+    const wsUrl = `${wsBase}/turn?personId=${encodeURIComponent(this.personId)}&sessionId=cas-${Date.now()}`
+      + (providerParam ? `&provider=${encodeURIComponent(providerParam)}` : '');
     this.ws = new WebSocket(wsUrl);
     this.ws.binaryType = 'arraybuffer';
 
